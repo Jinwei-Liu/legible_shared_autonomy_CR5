@@ -10,8 +10,8 @@ def main():
     print("Initializing...")
     
     goals = np.array([
-        [400, 0],
-        [600, 0]
+        [550, 0, 350],
+        [600, -50, 350]
     ])
     
     try:
@@ -31,13 +31,13 @@ def main():
     try:
         robot = RobotController()
         shared_autonomy = LegibleSharedAutonomy(goals)
-        
+         
         print("\nGoals configured:")
-        print(f"  Goal 1: X={goals[0][0]}, Y={goals[0][1]}")
-        print(f"  Goal 2: X={goals[1][0]}, Y={goals[1][1]}")
+        print(f"  Goal 1: X={goals[0][0]}, Y={goals[0][1]}, Z={goals[0][2]}")
+        print(f"  Goal 2: X={goals[1][0]}, Y={goals[1][1]}, Z={goals[1][2]}")
         print("\nStarting UI...")
-        print("  Manual mode: TW=0 (task-oriented)")
-        print("  Assisted mode: TW=5 (legibility-aware)")
+        print("  Standard SA: TW=0 (task-only)")
+        print("  Legible SA: TW=5 (task+legibility)")
         
         ui = TeleoperationUI(controller, robot, shared_autonomy)
         ui.run()

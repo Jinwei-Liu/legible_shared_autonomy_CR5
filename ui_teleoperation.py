@@ -2,7 +2,7 @@ import tkinter as tk
 import threading
 import time
 import numpy as np
-from config import UPDATE_RATE, X_MIN, X_MAX, Y_MIN, Y_MAX, Z_MIN, Z_MAX, CONTROL_SPEED, TASK_WEIGHT, SERVO_GAIN, SERVO_AHEADTIME
+from config import UPDATE_RATE, X_MIN, X_MAX, Y_MIN, Y_MAX, Z_MIN, Z_MAX, CONTROL_SPEED, TASK_WEIGHT, SERVO_GAIN, SERVO_AHEADTIME, HOME_POSITION
 
 
 class TeleoperationUI:
@@ -18,7 +18,7 @@ class TeleoperationUI:
         self.running = False
         self.enabled = False
         self.connected = False
-        self.autonomy_mode = tk.StringVar(value="Manual")
+        self.autonomy_mode = tk.StringVar(value="Standard")
         self.target_position = np.array([500.0, -25.0, 460.0])
         
         self.setup_ui()
@@ -42,14 +42,18 @@ class TeleoperationUI:
         tk.Button(frame_conn, text="Clear Error", command=self.clear_error, width=10).grid(
             row=0, column=4, padx=5)
         
+        self.btn_reset = tk.Button(frame_conn, text="Reset Home", command=self.reset_home,
+                                    state=tk.DISABLED, width=10)
+        self.btn_reset.grid(row=0, column=5, padx=5)
+        
         if self.shared_autonomy:
             frame_mode = tk.LabelFrame(self.root, text="Control Mode", padx=10, pady=10)
             frame_mode.pack(padx=10, pady=10, fill=tk.X)
             
-            tk.Radiobutton(frame_mode, text="Manual (TW=0)", variable=self.autonomy_mode, 
-                          value="Manual").pack(side=tk.LEFT, padx=10)
-            tk.Radiobutton(frame_mode, text=f"Assisted (TW={TASK_WEIGHT})", variable=self.autonomy_mode,
-                          value="Assisted").pack(side=tk.LEFT, padx=10)
+            tk.Radiobutton(frame_mode, text="Standard SA (TW=0)", variable=self.autonomy_mode, 
+                          value="Standard").pack(side=tk.LEFT, padx=10)
+            tk.Radiobutton(frame_mode, text=f"Legible SA (TW={TASK_WEIGHT})", variable=self.autonomy_mode,
+                          value="Legible").pack(side=tk.LEFT, padx=10)
         
         frame_pos = tk.LabelFrame(self.root, text="Position", padx=10, pady=10)
         frame_pos.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
@@ -122,11 +126,15 @@ class TeleoperationUI:
                 if success:
                     self.connected = True
                     current_pose = self.robot.get_pose()
+                    if current_pose is None:
+                        current_pose = np.array(HOME_POSITION)
+                        self.label_status.config(text="Warning: Could not read position, using home position")
                     self.controller.position = current_pose.copy()
                     self.target_position = current_pose.copy()
                     
                     self.btn_connect.config(text="Disconnect")
                     self.btn_enable.config(state=tk.NORMAL)
+                    self.btn_reset.config(state=tk.NORMAL)
                     self.entry_ip.config(state=tk.DISABLED)
                     
                     threading.Thread(target=self.display_update_loop, daemon=True).start()
@@ -147,6 +155,7 @@ class TeleoperationUI:
             
             self.btn_connect.config(text="Connect")
             self.btn_enable.config(text="Enable", state=tk.DISABLED)
+            self.btn_reset.config(state=tk.DISABLED)
             self.entry_ip.config(state=tk.NORMAL)
             self.label_status.config(text="Disconnected")
     
@@ -177,37 +186,68 @@ class TeleoperationUI:
             self.robot.clear_error()
             self.label_status.config(text="Error cleared")
     
+    def reset_home(self):
+        if not self.connected:
+            return
+        
+        was_running = self.running
+        if was_running:
+            self.running = False
+            time.sleep(0.1)
+        
+        self.label_status.config(text="Moving to home position...")
+        self.root.update()
+        
+        self.robot.move_to(HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2])
+        time.sleep(1.0)
+        
+        self.controller.position = np.array(HOME_POSITION)
+        self.target_position = np.array(HOME_POSITION)
+        
+        if self.shared_autonomy:
+            self.shared_autonomy.reset()
+        
+        self.label_status.config(text="Reset complete - at home position")
+        
+        if was_running:
+            self.running = True
+    
     def control_loop(self):
         while self.running:
             try:
-                if self.shared_autonomy and self.autonomy_mode.get() == "Assisted":
-                    self.shared_autonomy.task_weight = TASK_WEIGHT
+                if self.controller.position is None:
+                    self.controller.position = np.array(HOME_POSITION)
+                
+                if self.shared_autonomy and self.autonomy_mode.get() in ["Standard", "Legible"]:
+                    self.shared_autonomy.task_weight = TASK_WEIGHT if self.autonomy_mode.get() == "Legible" else 0
                     
                     raw_input = self.controller.get_input()
                     velocity = -raw_input * CONTROL_SPEED
                     
-                    state = self.controller.position[:2].copy()
-                    user_input = velocity[:2]
+                    if not self.shared_autonomy.started and np.linalg.norm(velocity) < 0.01:
+                        time.sleep(UPDATE_RATE)
+                        continue
+                    
+                    state = self.controller.position.copy()
+                    user_input = velocity
                     
                     self.shared_autonomy.update_belief(state, user_input)
                     robot_action = self.shared_autonomy.compute_robot_action(state, user_input)
                     
-                    combined = self.shared_autonomy.beta * user_input + (1 - self.shared_autonomy.beta) * robot_action
+                    if np.linalg.norm(user_input) < 0.01:
+                        combined = robot_action
+                    else:
+                        combined = self.shared_autonomy.beta * user_input + (1 - self.shared_autonomy.beta) * robot_action
                     
                     self.controller.position[0] = np.clip(
                         self.controller.position[0] + combined[0] * UPDATE_RATE, X_MIN, X_MAX)
                     self.controller.position[1] = np.clip(
                         self.controller.position[1] + combined[1] * UPDATE_RATE, Y_MIN, Y_MAX)
                     self.controller.position[2] = np.clip(
-                        self.controller.position[2] + velocity[2] * UPDATE_RATE, Z_MIN, Z_MAX)
+                        self.controller.position[2] + combined[2] * UPDATE_RATE, Z_MIN, Z_MAX)
                     
                     self.target_position = self.controller.position.copy()
                     self.update_beliefs()
-                    
-                elif self.shared_autonomy and self.autonomy_mode.get() == "Manual":
-                    self.shared_autonomy.task_weight = 0
-                    position, velocity = self.controller.update_position(UPDATE_RATE)
-                    self.target_position = position.copy()
                     
                 else:
                     position, velocity = self.controller.update_position(UPDATE_RATE)
