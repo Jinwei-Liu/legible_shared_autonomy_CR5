@@ -190,16 +190,33 @@ class TeleoperationUI:
         if not self.connected:
             return
         
-        was_running = self.running
-        if was_running:
+        was_enabled = self.enabled
+        if self.enabled:
             self.running = False
-            time.sleep(0.1)
+            time.sleep(0.2)
         
         self.label_status.config(text="Moving to home position...")
         self.root.update()
         
-        self.robot.move_to(HOME_POSITION[0], HOME_POSITION[1], HOME_POSITION[2])
-        time.sleep(1.0)
+        current_pos = self.robot.get_pose()
+        if current_pos is None:
+            current_pos = self.controller.position.copy()
+        
+        home = np.array(HOME_POSITION)
+        duration = 3.0
+        steps = int(duration / UPDATE_RATE)
+        
+        for i in range(steps):
+            alpha = (i + 1) / steps
+            target = current_pos * (1 - alpha) + home * alpha
+            
+            self.robot.servo_move(
+                target[0], target[1], target[2],
+                t=UPDATE_RATE,
+                gain=SERVO_GAIN,
+                aheadtime=SERVO_AHEADTIME
+            )
+            time.sleep(UPDATE_RATE)
         
         self.controller.position = np.array(HOME_POSITION)
         self.target_position = np.array(HOME_POSITION)
@@ -207,10 +224,11 @@ class TeleoperationUI:
         if self.shared_autonomy:
             self.shared_autonomy.reset()
         
-        self.label_status.config(text="Reset complete - at home position")
+        self.label_status.config(text="Reset complete - waiting for input")
         
-        if was_running:
+        if was_enabled:
             self.running = True
+            threading.Thread(target=self.control_loop, daemon=True).start()
     
     def control_loop(self):
         while self.running:

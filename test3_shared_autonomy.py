@@ -10,8 +10,8 @@ def main():
     print("Initializing...")
     
     goals = np.array([
-        [550, 0, 350],
-        [600, -50, 350]
+        [650, 0, 350],
+        [700, -50, 350]
     ])
     
     try:
