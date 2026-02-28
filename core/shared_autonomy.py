@@ -2,7 +2,7 @@ import numpy as np
 from .legibility import pi_H, compute_legibility, compute_reward
 from config import (CONTROL_SPEED, BETA_BASE, BETA_MIN, B_THRESH, 
                    D_MIN, D_MAX, TASK_WEIGHT, SEARCH_ANGLES, ANGLE_RANGE, 
-                   BETA_RATIONALITY, X_MIN, X_MAX, Y_MIN, Y_MAX, Z_MIN, Z_MAX)
+                   BETA_RATIONALITY, UPDATE_RATE, X_MIN, X_MAX, Y_MIN, Y_MAX, Z_MIN, Z_MAX)
 
 
 class LegibleSharedAutonomy:
@@ -56,39 +56,49 @@ class LegibleSharedAutonomy:
         if dist < 1e-3:
             return np.zeros(3)
         
-        task_action = CONTROL_SPEED * direction / dist
+        task_dir = direction / dist
         self.beta = self.compute_adaptive_beta(state, target_goal)
         
-        best_action, best_score = task_action, -np.inf
+        # 构建局部正交坐标系
+        perp1 = np.array([-task_dir[1], task_dir[0], 0.0])
+        if np.linalg.norm(perp1) < 1e-6:
+            perp1 = np.array([1.0, 0.0, 0.0])
+        perp1 = perp1 / np.linalg.norm(perp1)
+        perp2 = np.cross(task_dir, perp1)
+        perp2 = perp2 / np.linalg.norm(perp2)
         
-        task_dir = direction / dist
+        best_action = CONTROL_SPEED * task_dir
+        best_score = -np.inf
         
-        for i in range(SEARCH_ANGLES):
-            theta = (i / (SEARCH_ANGLES - 1) - 0.5) * 2 * ANGLE_RANGE
-            phi = (i / (SEARCH_ANGLES - 1) - 0.5) * 2 * ANGLE_RANGE
-            
-            perp1 = np.array([-task_dir[1], task_dir[0], 0])
-            if np.linalg.norm(perp1) < 1e-6:
-                perp1 = np.array([1, 0, 0])
-            perp1 = perp1 / np.linalg.norm(perp1)
-            
-            perp2 = np.cross(task_dir, perp1)
-            perp2 = perp2 / np.linalg.norm(perp2)
-            
-            rot_vec = task_dir + theta * perp1 + phi * perp2
-            rot_vec = rot_vec / np.linalg.norm(rot_vec)
-            
+        # 2D极坐标采样，覆盖整个锥面
+        n_radius = 4   # 径向层数（包含中心）
+        n_angle = 12   # 每层周向采样数，总计 1 + 3*12 = 37个点，或按下方逻辑
+        
+        # 中心方向（直接朝目标）
+        candidates = [task_dir]
+        
+        # 按极坐标展开锥面
+        for ri in range(1, n_radius):
+            r = (ri / (n_radius - 1)) * ANGLE_RANGE  # 偏转角半径，0~ANGLE_RANGE
+            for ai in range(n_angle):
+                a = (ai / n_angle) * 2 * np.pi  # 周向角度均匀分布
+                # 在锥面上偏转
+                rot_vec = task_dir + r * (np.cos(a) * perp1 + np.sin(a) * perp2)
+                rot_vec = rot_vec / np.linalg.norm(rot_vec)
+                candidates.append(rot_vec)
+        
+        for rot_vec in candidates:
             candidate = CONTROL_SPEED * rot_vec
-            
             leg_score = compute_legibility(candidate, state, self.goals, target_idx)
-            task_score = -np.linalg.norm(target_goal - (state + candidate * 0.1))
+            task_score = -np.linalg.norm(target_goal - (state + candidate * UPDATE_RATE))
             score = self.task_weight * leg_score + task_score
             
             if score > best_score:
-                best_score, best_action = score, candidate
+                best_score = score
+                best_action = candidate
         
         return best_action
-    
+        
     def reset(self):
         self.beliefs = np.ones(len(self.goals)) / len(self.goals)
         self.beta = BETA_BASE
