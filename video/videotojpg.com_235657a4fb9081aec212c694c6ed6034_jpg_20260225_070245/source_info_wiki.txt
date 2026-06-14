@@ -1,0 +1,42 @@
+== Source Information ==
+
+These frames were extracted from [[File:235657a4fb9081aec212c694c6ed6034.mp4]] using [https://videotojpg.com videotojpg.com].
+
+=== Suggested {{Information}} template ===
+
+<nowiki>
+{{Information
+|description=Frame extracted from [[File:235657a4fb9081aec212c694c6ed6034.mp4]]
+|source={{Extracted from|235657a4fb9081aec212c694c6ed6034.mp4}}
+|date={{According to Exif data}}
+|author=
+|permission=
+|other versions=
+}}
+</nowiki>
+
+=== Extracted frames ===
+
+* [[File:img_00003.jpg]] - frame at 0s667ms
+* [[File:img_00006.jpg]] - frame at 1s667ms
+* [[File:img_00010.jpg]] - frame at 3s
+* [[File:img_00014.jpg]] - frame at 4s333ms
+* [[File:img_00019.jpg]] - frame at 6s
+* [[File:img_00023.jpg]] - frame at 7s333ms
+* [[File:img_00026.jpg]] - frame at 8s333ms
+* [[File:img_00031.jpg]] - frame at 10s
+* [[File:img_00035.jpg]] - frame at 11s333ms
+* [[File:img_00039.jpg]] - frame at 12s667ms
+
+=== Copy-paste source lines ===
+
+[[File:235657a4fb9081aec212c694c6ed6034.mp4|frame at 0s667ms]]
+[[File:235657a4fb9081aec212c694c6ed6034.mp4|frame at 1s667ms]]
+[[File:235657a4fb9081aec212c694c6ed6034.mp4|frame at 3s]]
+[[File:235657a4fb9081aec212c694c6ed6034.mp4|frame at 4s333ms]]
+[[File:235657a4fb9081aec212c694c6ed6034.mp4|frame at 6s]]
+[[File:235657a4fb9081aec212c694c6ed6034.mp4|frame at 7s333ms]]
+[[File:235657a4fb9081aec212c694c6ed6034.mp4|frame at 8s333ms]]
+[[File:235657a4fb9081aec212c694c6ed6034.mp4|frame at 10s]]
+[[File:235657a4fb9081aec212c694c6ed6034.mp4|frame at 11s333ms]]
+[[File:235657a4fb9081aec212c694c6ed6034.mp4|frame at 12s667ms]]
