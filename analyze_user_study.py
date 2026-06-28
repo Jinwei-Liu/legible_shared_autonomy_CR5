@@ -2,15 +2,14 @@
 """
 User Study Data Analysis - Modified Version
 Generates single 5-panel figure with duration analysis integrated
-Only generates PDF output (no PNG)
+Generates PDF and PNG outputs
 """
 
 import json
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from scipy import stats
-from scipy.stats import kruskal, mannwhitneyu, pearsonr, spearmanr
+from scipy.stats import friedmanchisquare, pearsonr, spearmanr, wilcoxon
 from pathlib import Path
 import os
 
@@ -104,6 +103,31 @@ def merge_data(json_metrics_df, excel_df):
         how='left'
     )
     return merged
+
+
+def aggregate_participant_condition_means(merged_df):
+    """Average repeated trials within each participant-condition pair."""
+    metric_cols = [
+        'Intuitiveness_Score',
+        'Collaboration_Score',
+        'control_effort',
+        'duration',
+    ]
+    participant_df = (
+        merged_df
+        .groupby(['participant_id', 'task_weight'], as_index=False)[metric_cols]
+        .mean()
+        .sort_values(['participant_id', 'task_weight'])
+    )
+
+    expected_conditions = participant_df['task_weight'].nunique()
+    complete_ids = (
+        participant_df.groupby('participant_id')['task_weight']
+        .nunique()
+        .loc[lambda s: s == expected_conditions]
+        .index
+    )
+    return participant_df[participant_df['participant_id'].isin(complete_ids)].copy()
 
 
 def sig_marker(p):
@@ -268,70 +292,78 @@ def plot_correlation_subplot(ax, merged_df, label_size=20, tick_size=18):
 
 def test_and_get_pairwise_results(values_by_weight, metric_name):
     """
-    Perform statistical tests and return pairwise results
+    Perform participant-level paired tests and return pairwise results.
+    Values must be ordered by participant within each condition.
     """
     task_weights = sorted(values_by_weight.keys())
     pairwise_results = {}
-    
+
     if len(task_weights) == 2:
-        # Mann-Whitney U test for two groups
+        tw1, tw2 = task_weights
+        x = np.asarray(values_by_weight[tw1], dtype=float)
+        y = np.asarray(values_by_weight[tw2], dtype=float)
+        print()
+        print(f"{metric_name} - Wilcoxon signed-rank test:")
+
         try:
-            U, p = mannwhitneyu(values_by_weight[task_weights[0]],
-                               values_by_weight[task_weights[1]],
-                               alternative='two-sided')
-            print(f"\n{metric_name} - Mann-Whitney U test:")
-            print(f"  {task_weights[0]} vs {task_weights[1]}: U={U:.4f}, p={p:.4f} {sig_marker(p)}")
-            pairwise_results[(task_weights[0], task_weights[1])] = {
-                'U': U, 'p': p, 'marker': sig_marker(p)
+            if len(x) != len(y):
+                raise ValueError(f"paired samples have different lengths: {len(x)} vs {len(y)}")
+            if np.allclose(x - y, 0):
+                W, p = 0.0, 1.0
+            else:
+                W, p = wilcoxon(x, y, alternative='two-sided')
+            print(f"  {tw1} vs {tw2}: W={W:.4f}, p={p:.4f} {sig_marker(p)}")
+            pairwise_results[(tw1, tw2)] = {
+                'W': W, 'p': p, 'marker': sig_marker(p)
             }
         except ValueError as e:
-            print(f"\n{metric_name} - Test failed: {e}")
-            pairwise_results[(task_weights[0], task_weights[1])] = {
-                'U': 0, 'p': 1.0, 'marker': 'ns'
-            }
-    
+            print(f"  {tw1} vs {tw2}: Test failed ({e})")
+            pairwise_results[(tw1, tw2)] = {'W': 0.0, 'p': 1.0, 'marker': 'ns'}
+
     elif len(task_weights) > 2:
-        # Kruskal-Wallis for more than 2 groups
-        data_list = [values_by_weight[tw] for tw in task_weights]
+        data_list = [np.asarray(values_by_weight[tw], dtype=float) for tw in task_weights]
         all_values = np.concatenate(data_list)
-        
+
         if len(np.unique(all_values)) > 1:
             try:
-                H, p_overall = kruskal(*data_list)
-                print(f"\n{metric_name} - Kruskal-Wallis: H={H:.4f}, p={p_overall:.4f} {sig_marker(p_overall)}")
+                chi2, p_overall = friedmanchisquare(*data_list)
+                print()
+                print(f"{metric_name} - Friedman test: chi2={chi2:.4f}, p={p_overall:.4f} {sig_marker(p_overall)}")
             except ValueError as e:
-                print(f"\n{metric_name} - Kruskal-Wallis test failed: {e}")
+                print()
+                print(f"{metric_name} - Friedman test failed: {e}")
         else:
-            print(f"\n{metric_name} - Kruskal-Wallis test skipped (all values identical)")
-        
-        # Pairwise comparisons
+            print()
+            print(f"{metric_name} - Friedman test skipped (all values identical)")
+
         for i in range(len(task_weights)):
             for j in range(i + 1, len(task_weights)):
                 tw1, tw2 = task_weights[i], task_weights[j]
                 try:
-                    U, p = mannwhitneyu(values_by_weight[tw1],
-                                       values_by_weight[tw2],
-                                       alternative='two-sided')
+                    W, p = wilcoxon(values_by_weight[tw1], values_by_weight[tw2],
+                                    alternative='two-sided')
                     n_comp = len(task_weights) * (len(task_weights) - 1) // 2
-                    p_corr = min(p * n_comp, 1.0)  # Bonferroni correction
-                    print(f"  {tw1} vs {tw2}: U={U:.4f}, p={p:.4f}, p_corr={p_corr:.4f} {sig_marker(p_corr)}")
+                    p_corr = min(p * n_comp, 1.0)
+                    print(f"  {tw1} vs {tw2}: W={W:.4f}, p={p:.4f}, p_corr={p_corr:.4f} {sig_marker(p_corr)}")
                     pairwise_results[(tw1, tw2)] = {
-                        'U': U, 'p': p_corr, 'marker': sig_marker(p_corr)
+                        'W': W, 'p': p_corr, 'marker': sig_marker(p_corr)
                     }
                 except ValueError as e:
                     print(f"  {tw1} vs {tw2}: Test failed ({e})")
-                    pairwise_results[(tw1, tw2)] = {'U': 0, 'p': 1.0, 'marker': 'ns'}
-    
+                    pairwise_results[(tw1, tw2)] = {'W': 0.0, 'p': 1.0, 'marker': 'ns'}
+
     return pairwise_results
 
 
-def plot_main_five_panels(merged_df, output_dir='analysis_results',
+def plot_main_five_panels(merged_df, stats_df=None, output_dir='analysis_results',
                          font_size=18, label_size=20, tick_size=16):
     """
     Create the main 5-panel figure (a)(b)(c)(d)(e) in horizontal layout
     Panels a,b,d,e are box plots (same size), panel c is correlation scatter
     """
     setup_plot_style(font_size=font_size, label_size=label_size, tick_size=tick_size)
+    if stats_df is None:
+        stats_df = merged_df
     
     # 5 subplots with equal widths to match core style
     # Core uses [1,1,1,0.85] for 4 panels, where c is 1
@@ -351,7 +383,9 @@ def plot_main_five_panels(merged_df, output_dir='analysis_results',
     # (a) Intuitiveness Score
     intuit_data = {tw: merged_df[merged_df['task_weight'] == tw]['Intuitiveness_Score'].values 
                    for tw in task_weights}
-    intuit_results = test_and_get_pairwise_results(intuit_data, 'Intuitiveness Score')
+    intuit_stats_data = {tw: stats_df[stats_df['task_weight'] == tw]['Intuitiveness_Score'].values
+                         for tw in task_weights}
+    intuit_results = test_and_get_pairwise_results(intuit_stats_data, 'Intuitiveness Score')
     create_box_scatter_plot(ax1, intuit_data, 'Intuitiveness Score',
                            pairwise_results=intuit_results,
                            tick_size=tick_size, label_size=label_size)
@@ -359,18 +393,22 @@ def plot_main_five_panels(merged_df, output_dir='analysis_results',
     # (b) Collaboration Score
     collab_data = {tw: merged_df[merged_df['task_weight'] == tw]['Collaboration_Score'].values 
                    for tw in task_weights}
-    collab_results = test_and_get_pairwise_results(collab_data, 'Collaboration Score')
+    collab_stats_data = {tw: stats_df[stats_df['task_weight'] == tw]['Collaboration_Score'].values
+                         for tw in task_weights}
+    collab_results = test_and_get_pairwise_results(collab_stats_data, 'Collaboration Score')
     create_box_scatter_plot(ax2, collab_data, 'Collaboration Score',
                            pairwise_results=collab_results,
                            tick_size=tick_size, label_size=label_size)
     
-    # (c) Intuitiveness vs Collaboration scatter
+    # (c) Intuitiveness vs Collaboration scatter remains trial-level.
     plot_correlation_subplot(ax3, merged_df, label_size=label_size, tick_size=tick_size)
     
     # (d) User Effort
     effort_data = {tw: merged_df[merged_df['task_weight'] == tw]['control_effort'].values 
                    for tw in task_weights}
-    effort_results = test_and_get_pairwise_results(effort_data, 'User Effort')
+    effort_stats_data = {tw: stats_df[stats_df['task_weight'] == tw]['control_effort'].values
+                         for tw in task_weights}
+    effort_results = test_and_get_pairwise_results(effort_stats_data, 'User Effort')
     create_box_scatter_plot(ax4, effort_data, 'User Effort',
                            pairwise_results=effort_results,
                            tick_size=tick_size, label_size=label_size)
@@ -378,7 +416,9 @@ def plot_main_five_panels(merged_df, output_dir='analysis_results',
     # (e) Trial Duration (NEW)
     duration_data = {tw: merged_df[merged_df['task_weight'] == tw]['duration'].values 
                      for tw in task_weights}
-    duration_results = test_and_get_pairwise_results(duration_data, 'Trial Duration')
+    duration_stats_data = {tw: stats_df[stats_df['task_weight'] == tw]['duration'].values
+                           for tw in task_weights}
+    duration_results = test_and_get_pairwise_results(duration_stats_data, 'Trial Duration')
     create_box_scatter_plot(ax5, duration_data, 'Trial Duration (s)',
                            pairwise_results=duration_results,
                            tick_size=tick_size, label_size=label_size)
@@ -388,31 +428,37 @@ def plot_main_five_panels(merged_df, output_dir='analysis_results',
         ax.text(-0.1, 1.05, label, transform=ax.transAxes,
                 fontsize=label_size+2, fontweight='bold')
     
-    # Save figure (PDF ONLY)
+    # Save figure
     os.makedirs(output_dir, exist_ok=True)
-    output_file = f'{output_dir}/main_figure_5panels.pdf'
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
-    print(f"\n[SAVED] {output_file}")
+    pdf_file = f'{output_dir}/main_figure_5panels.pdf'
+    png_file = f'{output_dir}/main_figure_5panels.png'
+    plt.savefig(pdf_file, dpi=300, bbox_inches='tight')
+    plt.savefig(png_file, dpi=300, bbox_inches='tight')
+    print()
+    print(f"[SAVED] {pdf_file}")
+    print(f"[SAVED] {png_file}")
     plt.close()
 
 
 def print_summary_statistics(merged_df):
-    """Print summary statistics"""
-    print("\n" + "="*70)
-    print("SUMMARY STATISTICS")
+    """Print participant-level summary statistics."""
+    print()
     print("="*70)
-    
+    print("PARTICIPANT-LEVEL SUMMARY STATISTICS")
+    print("="*70)
+
     task_weights = sorted(merged_df['task_weight'].unique())
-    
+
     for tw in task_weights:
         subset = merged_df[merged_df['task_weight'] == tw]
-        
-        print(f"\nTask Weight = {tw}:")
-        print(f"  N trials: {len(subset)}")
-        print(f"  Intuitiveness: {subset['Intuitiveness_Score'].mean():.2f} ± {subset['Intuitiveness_Score'].std():.2f}")
-        print(f"  Collaboration: {subset['Collaboration_Score'].mean():.2f} ± {subset['Collaboration_Score'].std():.2f}")
-        print(f"  Control Effort: {subset['control_effort'].mean():.2f} ± {subset['control_effort'].std():.2f}")
-        print(f"  Duration: {subset['duration'].mean():.2f} ± {subset['duration'].std():.2f} seconds")
+
+        print()
+        print(f"Task Weight = {tw}:")
+        print(f"  N participants: {subset['participant_id'].nunique()}")
+        print(f"  Intuitiveness: {subset['Intuitiveness_Score'].mean():.2f} +/- {subset['Intuitiveness_Score'].std():.2f}")
+        print(f"  Collaboration: {subset['Collaboration_Score'].mean():.2f} +/- {subset['Collaboration_Score'].std():.2f}")
+        print(f"  Control Effort: {subset['control_effort'].mean():.2f} +/- {subset['control_effort'].std():.2f}")
+        print(f"  Duration: {subset['duration'].mean():.2f} +/- {subset['duration'].std():.2f} seconds")
 
 
 def main():
@@ -439,18 +485,28 @@ def main():
     merged_df = merge_data(json_metrics_df, excel_df)
     merged_df = merged_df.dropna(subset=['Intuitiveness_Score', 'Collaboration_Score'])
     
-    print(f"Final dataset: {len(merged_df)} complete trials")
-    
-    print_summary_statistics(merged_df)
-    
-    print("\nGenerating figure...")
-    plot_main_five_panels(merged_df)
-    
-    print("\n" + "="*70)
+    print(f"Final trial-level dataset: {len(merged_df)} complete trials")
+
+    participant_df = aggregate_participant_condition_means(merged_df)
+    print(
+        f"Participant-level dataset: {len(participant_df)} condition means "
+        f"from {participant_df['participant_id'].nunique()} complete participants"
+    )
+
+    print_summary_statistics(participant_df)
+
+    print()
+    print("Generating figure...")
+    plot_main_five_panels(merged_df, stats_df=participant_df)
+
+    print()
+    print("="*70)
     print("ANALYSIS COMPLETE")
     print("="*70)
-    print("\nGenerated:")
+    print()
+    print("Generated:")
     print("  - analysis_results/main_figure_5panels.pdf")
+    print("  - analysis_results/main_figure_5panels.png")
 
 
 if __name__ == "__main__":
